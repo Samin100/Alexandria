@@ -9,7 +9,7 @@ const { exec } = require('child_process');
 
 
 // checking whether this is the development environment
-const isDev = process.env.DEV === 'true!'
+const isDev = process.env.DEV === 'true'
 if (isDev) {
     console.log('development')
 }
@@ -28,7 +28,7 @@ function createWindow() {
         height: 1080,
         frame: false,
         title: 'Alexandria',
-        icon: __dirname + '/alexandria-logo.png',
+        icon: path.join(__dirname, 'alexandria-logo.png'),
         webPreferences: {
             nodeIntegration: true,
         }

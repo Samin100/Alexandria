@@ -8,12 +8,13 @@
   "scripts": {
     "start": "DEV=true electron .",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dist": "electron-builder"
+    "dist": "CSC_NAME=9VFHP99NKC electron-builder"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^9.0.0"
+    "electron": "^9.0.0",
+    "electron-builder": "^22.7.0"
   },
   "dependencies": {
     "axios": "^0.19.2",

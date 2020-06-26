@@ -835,7 +835,8 @@ class App extends Component {
     } else if (this.state.localBooks.length === 0) {
       return (
         <p style={{
-          padding: 10
+          padding: 10,
+          paddingLeft: 20,
         }}>Search for a book to add it to your library!</p>
       )
     }
@@ -875,6 +876,7 @@ class App extends Component {
             paddingLeft: 20,
             paddingRight: 20,
             maxWidth: 420,
+            minWidth: 420,
             margin: 15,
             borderRadius: 8
           }}
