@@ -5,11 +5,14 @@ var convert = require('xml-js');
 const fs = require("fs");
 const path = require('path')
 const open = require('open');
-
 const { exec } = require('child_process');
 
 
-
+// checking whether this is the development environment
+const isDev = process.env.DEV === 'true!'
+if (isDev) {
+    console.log('development')
+}
 
 // the directory where books are stored
 const booksDir = path.join(process.env.HOME, 'Alexandria')
@@ -32,11 +35,13 @@ function createWindow() {
     })
 
     // load the react project
-    win.loadURL('http://localhost:2020/')
+    if (isDev) {
+        win.loadURL('http://localhost:2020/')
+        win.webContents.openDevTools()
+    } else {
+        win.loadURL(`file://${path.join(__dirname, './../react-build/index.html')}`)
+    }
 
-    // win.maximize()
-    // Open the DevTools.
-    win.webContents.openDevTools()
 }
 
 // This method will be called when Electron has finished
@@ -150,7 +155,6 @@ ipcMain.handle('search-goodreads', async (event, searchQuery) => {
                 author: book.best_book.author.name._text,
                 image: book.best_book.image_url._text
             }
-            console.log(bookData)
 
         })
     })
@@ -161,7 +165,7 @@ ipcMain.handle('search-goodreads', async (event, searchQuery) => {
 // the handler for window events 
 ipcMain.handle('window-event', (event, type) => {
     // type will either be close, resize, or minimize
-    console.log(type)
+
     if (type === 'close') {
         win.close()
     } else if (type === 'resize') {
@@ -171,31 +175,69 @@ ipcMain.handle('window-event', (event, type) => {
     }
 })
 
+
+ipcMain.handle('get-local-books', (event) => {
+    // returns an array of the books in bookDir
+    // the array is ordered by which book has been opened most recently
+    if (!fs.existsSync(booksDir)) {
+        return []
+    }
+    let items = fs.readdirSync(booksDir)
+    let books = []
+    for (let i = 0; i < items.length; i++) {
+        // the book directory
+        let bookDir = path.join(booksDir, items[i])
+        if (fs.lstatSync(bookDir).isDirectory()) {
+            let files = fs.readdirSync(bookDir)
+            let bookFileExists = false
+            let stats;
+            let bookFile;
+            for (let f of files) {
+                if (f.endsWith('.epub') || f.endsWith('.pdf')) {
+                    bookFileExists = true
+                    // getting the access time for this file via fs stats
+                    bookFile = path.join(bookDir, f)
+                    stats = fs.statSync(bookFile)
+                    break
+                }
+            }
+            if (bookFileExists && fs.existsSync(path.join(bookDir, 'data.json'))) {
+                // if the book file exists as well as data.json we add it to the books list
+                // opening data.json
+                let bookData = fs.readFileSync(path.join(bookDir, 'data.json'));
+                bookData = JSON.parse(bookData);
+                console.log(bookData)
+                books.push({
+                    book: bookData,
+                    stats: stats,
+                    path: bookFile,
+                })
+            }
+        }
+    }
+    // sorting the books by last access time
+    books.sort((a, b) => (a.stats.atime < b.stats.atime) ? 1 : -1)
+    return books
+})
+
+ipcMain.handle('open-book', (event, localBook) => {
+    open(localBook.path)
+})
+
+ipcMain.handle('open-books-dir', (event) => {
+    // opens the directory where the books are stored
+    open(booksDir)
+})
+
+
 ipcMain.handle('download-book', (event, book) => {
-
-
-
-    // axios.get(libgenBook.mirror1).then((res) => {
-    //     const $ = cheerio.load(res.data)
-    //     let url = $('h2').eq(0).children().eq(0).attr('href')
-    //     console.log('mirror1 started')
-    //     axios.get(url, {
-    //         responseType: "stream",
-    //         onDownloadProgress: (progressEvent) => {
-    //             let percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-    //             console.log(percentCompleted)
-    //         },
-    //     }).then(bookRes => {
-    //         console.log('mirror1 finished')
-    //     })
-    // })
 
     const { googleBook, libgenBook } = book;
 
     axios.get(libgenBook.mirror2).then(async (res) => {
         const $ = cheerio.load(res.data)
         let url = $('h2').eq(0).parent().attr('href')
-        console.log('mirror2 started')
+
 
         const request = await axios({
             url: url,
@@ -210,8 +252,43 @@ ipcMain.handle('download-book', (event, book) => {
         // ensuring the books directory exists
         if (!fs.existsSync(booksDir)) fs.mkdirSync(booksDir)
 
+        // the directory for this book is the title of the book and the first author's name
+        let title = googleBook.volumeInfo.title
+        title = googleBook.volumeInfo.authors ? `${title} - ${googleBook.volumeInfo.authors[0]}` : title
+
+
+        console.log(title)
+        let bookDir = path.join(booksDir, title)
+
+        // creating the directory for this book
+        if (!fs.existsSync(bookDir)) fs.mkdirSync(bookDir)
+
+        // writing out the google books JSON blob for this book inside of bookDir
+        let bookData = JSON.stringify(googleBook)
+        fs.writeFileSync(path.join(bookDir, 'data.json'), bookData)
+
+        // downloading this book's cover image if it exists
+        if (googleBook.volumeInfo?.imageLinks?.thumbnail) {
+            // getting the cover URL
+            let imgUrl = googleBook.volumeInfo.imageLinks.thumbnail
+            // creating the img request
+            const imgRequest = await axios({
+                url: imgUrl,
+                method: 'GET',
+                responseType: 'stream'
+            })
+            // writer to save the image file
+            const imgWriter = fs.createWriteStream(path.join(bookDir, 'cover.jpg'));
+            imgRequest.data.pipe(imgWriter)
+            imgWriter.on('error', err => {
+                console.log('Error while saving book cover image:')
+                console.log(err)
+                imgWriter.close();
+            });
+        }
+
         // creating the file writer
-        const writer = fs.createWriteStream(path.join(booksDir, filename));
+        const writer = fs.createWriteStream(path.join(bookDir, filename));
         request.data.pipe(writer)
         let error;
 
@@ -225,8 +302,8 @@ ipcMain.handle('download-book', (event, book) => {
                 console.log('An error occurred while downloading')
                 console.log(error)
             } else {
-                console.log('done downloading! opening...')
-                // open(path.join(booksDir, filename))
+                // automatically open the book
+                // open(path.join(bookDir, filename))
             }
 
             win.webContents.send('download-complete', {
@@ -243,18 +320,12 @@ ipcMain.handle('download-book', (event, book) => {
         // handling chunk downloads
         request.data.on('data', (chunk) => {
             downloaded += chunk.length
-            console.log(`${(downloaded / contentLength) * 100}%`)
             win.webContents.send('download-progress', {
                 id: googleBook.id,
                 contentLength: contentLength,
                 downloaded: downloaded
             })
         })
-
-        request.data.on('finish', () => {
-            console.log('complete')
-        })
-
 
         // axios.get(url, {
         //     responseType: "stream",

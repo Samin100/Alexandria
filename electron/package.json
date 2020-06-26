@@ -1,11 +1,14 @@
 {
   "name": "alexandria",
+  "productName": "Alexandria",
   "version": "1.0.0",
   "description": "",
+  "homepage": "./",
   "main": "./src/index.js",
   "scripts": {
-    "start": "electron .",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "DEV=true electron .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dist": "electron-builder"
   },
   "author": "",
   "license": "ISC",
@@ -17,5 +20,9 @@
     "cheerio": "^1.0.0-rc.3",
     "open": "^7.0.4",
     "xml-js": "^1.6.11"
+  },
+  "build": {
+    "appId": "Alexandria",
+    "productName": "Alexandria"
   }
 }

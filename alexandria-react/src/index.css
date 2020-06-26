@@ -86,6 +86,11 @@ html, body, #app, #app>div {
   user-select: none;
 }
 
+.drag-handle {
+  -webkit-user-select: none;
+  -webkit-app-region: drag;
+}
+
 table {
   border-collapse: collapse;
 
@@ -163,4 +168,8 @@ body {
 }
 .Resizer.disabled:hover {
   border-color: transparent;
+}
+
+.search-result-book-row:hover {
+  background-color: red;
 }

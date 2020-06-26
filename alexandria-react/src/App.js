@@ -11,6 +11,7 @@ import downloadCompleteSound from './unconvinced.mp3'
 
 
 
+// loading electron from the window to access IpcRenderer
 const electron = window.require('electron');
 const ipcRenderer = electron.ipcRenderer;
 
@@ -23,7 +24,6 @@ const bytesToString = (bytes) => {
 };
 
 
-
 class App extends Component {
 
   constructor(props) {
@@ -32,18 +32,23 @@ class App extends Component {
       searchBox: '',
       searchResults: [],
       selectedBook: null,
-      activeTab: 'search',
-      downloads: []
+      activeTab: 'bookshelf',
+      downloads: [],
+      localBooks: null
     }
     this.fetchGoogleBooksDebounced = debounce(this.fetchGoogleBooks, 300)
   }
 
 
+
   componentDidMount() {
+    this.ePub = window.ePub
+
+    // updating the local books
+    this.updateLocalBooks()
 
     ipcRenderer.on('download-progress', (event, message) => {
       // the event handler for updating download progress
-      console.log(message)
 
       let newDownloads = []
       for (let download of this.state.downloads) {
@@ -64,8 +69,6 @@ class App extends Component {
     ipcRenderer.on('download-complete', (event, message) => {
       // the event handler for setting a download as complete
 
-
-
       let newDownloads = []
       // removing the download from the list
       this.state.downloads.forEach(download => {
@@ -84,27 +87,48 @@ class App extends Component {
           })
 
           finishedNotification.onclick = () => {
-            console.log('notification clicked')
-            // TODO: open this book in the ebook reader
+            // opening the book when the notification is clicked
+            for (let localBook of this.state.localBooks) {
+              if (message.id === localBook.book.id) {
+
+                this.onLocalBookClick(localBook)
+                break
+              }
+            }
             console.log(download.googleBook)
           }
         }
       })
-
       this.setState({ downloads: newDownloads })
+      this.updateLocalBooks()
     })
 
     axios.get(`https://www.googleapis.com/books/v1/volumes`, {
       params: {
-        q: 'ron chernow'
+        q: '"Stripe Press"'
       }
     }).then((res) => {
       this.setState({ searchResults: res.data.items })
     })
   }
 
+  updateLocalBooks = () => {
+    // calling this function will update the localBooks value of state
+    ipcRenderer.invoke('get-local-books').then((books) => {
+
+      this.setState({ localBooks: books })
+      console.log(books)
+    })
+  }
+
   setActiveTab = (tab) => {
-    this.setState({ activeTab: tab })
+    this.setState({ activeTab: tab, selectedBook: null })
+
+
+    if (tab === 'bookshelf') {
+      // then we get the local books
+      this.updateLocalBooks()
+    }
   }
 
   onSearchBoxChange = (e) => {
@@ -138,6 +162,7 @@ class App extends Component {
             let uniqueResults = uniqBy(res.data.items, 'id')
 
             this.setState({ searchResults: uniqueResults, selectedBook: res.data.items[0] })
+            console.log(res.data.items)
             this.FetchLibgenSearchResults(res.data.items[0])
           } else {
             // if there are no results we clear the results
@@ -166,13 +191,10 @@ class App extends Component {
       ]
     })
 
-    console.log(bookDownload)
 
     ipcRenderer.invoke('download-book', {
       libgenBook: libgenResult,
       googleBook: this.state.selectedBook
-    }).then((res) => {
-      console.log(res)
     })
   }
 
@@ -185,6 +207,11 @@ class App extends Component {
     }
   }
 
+  onLocalBookClick = (localBook) => {
+    // when a local book is clicked
+    ipcRenderer.invoke('open-book', localBook)
+  }
+
   handleLibgenSearchResults = (searchResults, selectedBook) => {
     console.log(searchResults)
 
@@ -193,7 +220,7 @@ class App extends Component {
     searchResults.forEach((book, index) => {
 
       // only allowing epubs and pdfs
-      let supportedExtensions = ['epub', 'pdf', 'mobi']
+      let supportedExtensions = ['epub', 'pdf',]
       if (!supportedExtensions.includes(book.extension.toLowerCase())) {
         return
       }
@@ -238,8 +265,6 @@ class App extends Component {
   FetchLibgenSearchResults = (book) => {
 
 
-    console.log('searching libgen for', book.volumeInfo.title)
-
     // if a book already has libgen matches then we return
     // or if a search has already began
     if (book.searching || Array.isArray(book.libgenMatches) || !book) return
@@ -265,8 +290,6 @@ class App extends Component {
     // appending the first author's name to the query
     searchQuery = searchQuery + ` ${book.volumeInfo.authors ? book.volumeInfo.authors : ``}`
 
-    console.log(searchQuery)
-
     // sending the query to the main process to make the request for us
     ipcRenderer.invoke('search-libgen-nonfiction', searchQuery).then((results) => {
 
@@ -287,7 +310,6 @@ class App extends Component {
         // retrying with a broader search query by removing the book's description
         // we keep the first author's name in the query
         searchQuery = book.volumeInfo.title + ` ${book.volumeInfo.authors ? book.volumeInfo.authors[0] : ``}`
-        console.log(searchQuery)
         ipcRenderer.invoke('search-libgen-nonfiction', book.volumeInfo.title).then((results) => {
           this.handleLibgenSearchResults(results, book)
         })
@@ -297,12 +319,12 @@ class App extends Component {
     })
   }
 
-  NoCoverImage = (props) => {
+  NoCoverImage = (height, width, fontSize) => {
     return (
       <div style={{
         backgroundColor: `#eee`,
-        minHeight: props.height ? props.height : props.width / 3,
-        minWidth: props.width ? props.width : `100%`,
+        minHeight: height ? height : width / 3,
+        minWidth: width ? width : `100%`,
         marginRight: 20,
         objectFit: 'contain',
         alignSelf: 'flex-start',
@@ -314,7 +336,7 @@ class App extends Component {
           alignSelf: 'center',
           justifyContent: 'center',
           color: 'grey',
-          fontSize: props.fontSize,
+          fontSize: fontSize,
           textAlign: 'center'
         }}>No cover</p>
       </div>
@@ -338,18 +360,19 @@ class App extends Component {
 
       return (
         <motion.div
-          className="noSelect"
+          className="noSelect search-result-book-row"
           initial='initial'
           animate='animate'
           variants={variants}
           onClick={() => this.onBookRowClick(item)}
           data-index={index}
           key={item.id}
+          transition={{ duration: 0 }}
           style={{
             display: 'flex',
             paddingTop: 10,
             paddingBottom: 10,
-            backgroundColor: isSelected ? 'rgba(0,100,255,0.05)' : 'white',
+            backgroundColor: isSelected ? 'rgba(0,100,255,0.05)' : 'rgba(255,255,255,1)',
             border: isSelected ? `2px solid deepskyblue` : `2px solid transparent`,
             borderBottom: isSelected ? `2px solid deepskyblue` : `2px solid #eee`,
             paddingLeft: 20,
@@ -369,7 +392,7 @@ class App extends Component {
               }}
             />
             :
-            <this.NoCoverImage height={100} width={70} fontSize={12} />
+            this.NoCoverImage(100, 70, 17)
           }
           <div
             className="noSelect"
@@ -397,6 +420,7 @@ class App extends Component {
     })
     return BookRows
   }
+
 
   SelectedBook = (props) => {
     if (!this.state.selectedBook) {
@@ -431,12 +455,56 @@ class App extends Component {
       }
     }
 
-    console.log('bookdownload')
-    console.log(bookDownload)
+    // checking if this book already exists in the user's local library
+    let bookAlreadyDownloaded;
+    for (let localBook of this.state.localBooks) {
+      if (this.state.selectedBook.id === localBook.book.id) {
+        bookAlreadyDownloaded = localBook
+        break
+      }
+    }
 
     let BookStatusBar;
-    if (isDownloading) {
 
+    if (bookAlreadyDownloaded) {
+      BookStatusBar = (
+        <div style={{
+          position: 'absolute',
+          alignSelf: 'flex-end',
+          justifyContent: 'flex-end',
+          display: 'flex',
+          bottom: 0,
+          right: 0,
+          overflow: 'hidden',
+          borderRadius: 4,
+        }}>
+          <motion.div
+            key={book.id}
+            variants={variants}
+            initial='initial'
+            animate='animate'
+            onClick={() => this.onLocalBookClick(bookAlreadyDownloaded)}
+            style={{
+              backgroundColor: 'dodgerblue',
+              border: `1px solid lightgrey`,
+              boxShadow: '0px 0px 8px lightgrey',
+              borderRadius: 4,
+              padding: 20,
+              paddingTop: 10,
+              paddingBottom: 10,
+            }}>
+            <p style={{
+              color: 'white',
+              padding: 5,
+              fontWeight: 'bold'
+            }}>
+              Open {this.state.selectedBook.volumeInfo.title}
+            </p>
+          </motion.div>
+        </div>
+      )
+
+    } else if (isDownloading) {
       let downloadText
       let percent = 0
       if (!bookDownload.contentLength) {
@@ -473,32 +541,19 @@ class App extends Component {
               minWidth: 440,
               maxWidth: 440,
             }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'left',
+            <p style={{
               alignSelf: 'center',
-            }}>
-              <img
-                alt=""
-                src={SpinnerBlack}
-                height={15}
-                width={15}
-                style={{
-                  marginRight: 10,
-                  alignSelf: 'center',
-                  marginLeft: 10
-                }}
-              />
-              <p style={{
-                alignSelf: 'center',
-              }}>{downloadText}</p>
-            </div>
+              fontSize: 16
+            }}>{Math.floor(percent)}%</p>
             <Line percent={percent} strokeWidth="1" strokeColor="deepskyblue" />
+            <p style={{
+              alignSelf: 'center',
+              fontSize: 14
+            }}>{downloadText}</p>
 
           </motion.div>
         </div>
       )
-
     } else if (book.searching) {
       BookStatusBar = (
         <div style={{
@@ -557,6 +612,7 @@ class App extends Component {
             whileHover={{
               backgroundColor: 'white',
             }}
+
             key={match.id}
             style={{
               display: 'flex',
@@ -701,7 +757,7 @@ class App extends Component {
               minWidth: 180,
               alignSelf: 'flex-start',
             }}>
-              <this.NoCoverImage height={250} width={170} fontSize={18} />
+              {this.NoCoverImage(250, 170, 18)}
             </div>
           }
           {book.searching ?
@@ -766,8 +822,109 @@ class App extends Component {
               }}>{book.volumeInfo.categories?.join(',')}</p>
             </>
             : null}
-          <img src={`http://covers.openlibrary.org/b/isbn/${book.volumeInfo.industryIdentifiers[0]}-L.jpg`} />
+
         </div>
+      </div>
+    )
+  }
+
+  LocalBooksResults = (props) => {
+
+    if (!this.state.localBooks) {
+      return null
+    } else if (this.state.localBooks.length === 0) {
+      return (
+        <p style={{
+          padding: 10
+        }}>Search for a book to add it to your library!</p>
+      )
+    }
+
+    const BookRows = this.state.localBooks.map((localBook, index) => {
+      const isSelected = this.state.selectedBook?.id === localBook.book.id
+      let book = localBook.book.volumeInfo
+
+      const variants = {
+        initial: { opacity: 0, y: 60 },
+        animate: { opacity: 1, y: 0, transition: { delay: index * .03 } }
+      }
+
+      return (
+        <motion.div
+          transition={{ duration: 0 }}
+          className="noSelect local-book-item"
+          initial='initial'
+          animate='animate'
+          variants={variants}
+          onClick={() => this.onLocalBookClick(localBook)}
+          data-index={index}
+          key={`local-${localBook.book.id}`}
+          whileHover={{
+            scale: 1.02,
+            transition: { duration: .2 },
+          }}
+          whileTap={{
+            backgroundColor: 'rgba(0,100,255,.1)',
+          }}
+          style={{
+            display: 'flex',
+            paddingTop: 10,
+            paddingBottom: 10,
+            backgroundColor: 'white',
+            boxShadow: "6px 6px rgba(0,100,255,.1)",
+            paddingLeft: 20,
+            paddingRight: 20,
+            maxWidth: 420,
+            margin: 15,
+            borderRadius: 8
+          }}
+        >
+          {book.imageLinks ?
+            <img
+              alt=""
+              className="noSelect"
+              src={book.imageLinks ? book.imageLinks.thumbnail : null}
+              style={{
+                marginRight: 20,
+                objectFit: 'contain',
+                alignSelf: 'flex-start',
+                height: 100
+              }}
+            />
+            :
+            this.NoCoverImage(100, 70, 17)
+          }
+          <div
+            className="noSelect"
+            style={{
+
+            }}>
+            <p style={{
+              fontWeight: 'bold',
+            }}>{book.title}{book.subtitle ? ": " + book.subtitle : null}
+            </p>
+
+            <p style={{
+              color: 'grey',
+              fontSize: 14,
+              marginTop: 5
+            }}>{book.authors ? book.authors.join(", ") : "Author Unavailable"}</p>
+
+            <p style={{
+              color: 'grey',
+              fontSize: 14,
+            }}>{moment(book.publishedDate).year()}</p>
+          </div>
+        </motion.div>
+      )
+    })
+    return BookRows
+  }
+
+  ereader = () => {
+    return (
+      <div id='ereader'>
+
       </div>
     )
   }
@@ -775,7 +932,7 @@ class App extends Component {
 
   MainArea = (props) => {
 
-    if (this.state.activeTab === `search`) {
+    if (this.state.activeTab === 'search') {
       return (
         <SplitPane
           split="vertical"
@@ -818,7 +975,7 @@ class App extends Component {
             <div style={{
               paddingTop: 60
             }}>
-              <this.SearchResults />
+              {this.SearchResults()}
             </div>
           </div>
 
@@ -828,36 +985,40 @@ class App extends Component {
             overflowX: 'hidden',
             overflowY: 'scroll'
           }}>
-            < this.SelectedBook />
+            {this.SelectedBook()}
           </div>
         </SplitPane>
-
       )
-    } else {
+    } else if (this.state.activeTab === 'bookshelf') {
       return (
-        <SplitPane
-          split="vertical"
-          primary="first"
-          allowResize={true}
-          defaultSize={450}
-        >
+
+        <div style={{
+          overflow: 'scroll',
+          maxHeight: '100vh',
+          minHeight: '100vh',
+          position: 'relative',
+          borderRight: `1px solid lightgrey`,
+          background: '#eee'
+        }}>
           <div style={{
-
-            overflow: 'scroll',
-            maxHeight: '100vh',
-            minHeight: '100vh',
-            position: 'relative',
+            paddingTop: 20,
+            paddingLeft: 20,
+            paddingBottom: 10,
+            borderBottom: `2px solid #eee`
           }}>
+            <h3 style={{
+            }}>My Bookshelf</h3>
           </div>
-
           <div style={{
-
+            display: 'flex',
+            flexWrap: 'wrap',
           }}>
+            {this.LocalBooksResults()}
           </div>
-        </SplitPane>
+        </div>
+
       )
     }
-
   }
 
   Sidebar = (props) => {
@@ -873,13 +1034,14 @@ class App extends Component {
         }}>
 
         <div
-          className="window-button-container"
+          className="window-button-container drag-handle"
           style={{
             paddingTop: 10,
             paddingLeft: 10,
             display: 'flex',
             paddingBottom: 10,
-            position: 'absolute'
+            position: 'absolute',
+            width: `100%`
           }}>
           <div
             onClick={() => ipcRenderer.invoke('window-event', 'close')}
@@ -914,34 +1076,9 @@ class App extends Component {
               marginRight: 9
             }}></div>
         </div>
-
-
-        <h2 style={{
-          color: 'white',
-          alignSelf: 'left',
-          textAlign: 'left',
-          marginBottom: 10,
-          opacity: .8,
-          userSelect: 'none',
-          fontWeight: '300',
-          fontSize: 22,
-          paddingLeft: 20,
-          paddingRight: 20,
-          marginTop: 40
-        }}>Alexandria</h2>
-        <p
-          onClick={() => this.setActiveTab('bookshelf')}
-          style={{
-            padding: 5,
-            paddingLeft: 20,
-            paddingRight: 20,
-            backgroundColor: this.state.activeTab === 'bookshelf' ? `rgba(0,0,255,.4)` : `transparent`,
-            color: 'white',
-            alignSelf: 'center',
-            fontSize: 14,
-            userSelect: 'none'
-          }}><GiBookshelf />&nbsp; Bookshelf</p>
-
+        <p style={{
+          marginTop: 50
+        }}></p>
         <p
           onClick={() => this.setActiveTab('search')}
           style={{
@@ -953,7 +1090,39 @@ class App extends Component {
             alignSelf: 'center',
             fontSize: 14,
             userSelect: 'none'
-          }}>+ &nbsp;Add new book</p>
+          }}>🔎 &nbsp;Get book</p>
+
+        <p
+          onClick={() => this.setActiveTab('bookshelf')}
+          style={{
+            padding: 5,
+            paddingLeft: 20,
+            paddingRight: 20,
+            backgroundColor: this.state.activeTab === 'bookshelf' ? `rgba(0,0,255,.4)` : `transparent`,
+            color: 'white',
+            alignSelf: 'center',
+            fontSize: 14,
+            userSelect: 'none'
+          }}>📚&nbsp; My Bookshelf</p>
+
+        <motion.p
+          whileHover={{
+            color: 'rgba(255,255,255,1)',
+          }}
+          onClick={() => ipcRenderer.invoke('open-books-dir')}
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            marginBottom: 10,
+            padding: 5,
+            paddingLeft: 20,
+            paddingRight: 20,
+            backgroundColor: 'transparent',
+            color: 'rgba(255,255,255,.7)',
+            alignSelf: 'center',
+            fontSize: 14,
+            userSelect: 'none'
+          }}>📁 Open Storage Directory</motion.p>
       </div>
     )
   }
