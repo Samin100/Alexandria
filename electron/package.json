@@ -17,7 +17,7 @@
     "electron-builder": "^22.7.0"
   },
   "dependencies": {
-    "axios": "^0.19.2",
+    "axios": "^0.21.1",
     "cheerio": "^1.0.0-rc.3",
     "open": "^7.0.4",
     "xml-js": "^1.6.11"
