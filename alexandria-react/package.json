@@ -9,7 +9,7 @@
     "@testing-library/react": "^9.3.2",
     "@testing-library/user-event": "^7.1.2",
     "axios": "^0.19.2",
-    "electron": "^9.0.4",
+    "electron": "^9.4.0",
     "framer-motion": "^1.11.1",
     "lodash": "^4.17.15",
     "moment": "^2.26.0",
