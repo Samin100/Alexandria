@@ -18,6 +18,7 @@ mv ../alexandria-react/build ./react-build
 
 # building the electron app
 echo "Building the Electron app"
+rm -rf dist/
 yarn dist
 
 # opening the directory
