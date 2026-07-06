@@ -1,29 +1,45 @@
 {
   "name": "alexandria",
   "productName": "Alexandria",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "",
   "homepage": "./",
   "main": "./src/index.js",
   "scripts": {
     "start": "DEV=true electron .",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dist": "CSC_NAME=9VFHP99NKC electron-builder"
+    "dist": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^9.0.0",
-    "electron-builder": "^22.7.0"
+    "electron": "^41.10.0",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "axios": "^0.19.2",
+    "axios": "^1.7.4",
     "cheerio": "^1.0.0-rc.3",
-    "open": "^7.0.4",
-    "xml-js": "^1.6.11"
+    "open": "^7.0.4"
   },
   "build": {
     "appId": "Alexandria",
-    "productName": "Alexandria"
+    "productName": "Alexandria",
+    "files": [
+      "src/**/*",
+      "react-build/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "src/alexandria.icns",
+      "identity": null
+    }
   }
 }

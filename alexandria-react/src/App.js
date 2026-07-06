@@ -3,15 +3,15 @@ import axios from "axios";
 import moment from "moment";
 import { motion } from "framer-motion";
 import { GiBookshelf } from "react-icons/gi";
-import { debounce, deburr, uniqBy } from "lodash";
+import { debounce, uniqBy } from "lodash";
 import SpinnerBlack from "./spinner-black.svg";
 import SplitPane from "react-split-pane";
 import { Line } from "rc-progress";
 import downloadCompleteSound from "./unconvinced.mp3";
 
 // loading electron from the window to access IpcRenderer
-const electron = window.require("electron");
-const ipcRenderer = electron.ipcRenderer;
+// (window.require bypasses webpack and resolves against electron's runtime)
+const { ipcRenderer } = window.require("electron");
 
 const bytesToString = (bytes) => {
   // converts an integer bytes into a human readable string
@@ -21,6 +21,14 @@ const bytesToString = (bytes) => {
     " " +
     ["B", "kB", "MB", "GB", "TB"][i]
   );
+};
+
+const bookYear = (volumeInfo) => {
+  // the year a book was published, or an empty string when unknown
+  if (!volumeInfo || !volumeInfo.publishedDate) {
+    return "";
+  }
+  return moment(volumeInfo.publishedDate).year();
 };
 
 class App extends Component {
@@ -34,12 +42,10 @@ class App extends Component {
       downloads: [],
       localBooks: null,
     };
-    this.fetchGoogleBooksDebounced = debounce(this.fetchGoogleBooks, 300);
+    this.fetchBooksDebounced = debounce(this.fetchBooks, 300);
   }
 
   componentDidMount() {
-    this.ePub = window.ePub;
-
     // updating the local books
     this.updateLocalBooks();
 
@@ -97,16 +103,93 @@ class App extends Component {
       this.updateLocalBooks();
     });
 
-    axios
-      .get(`https://www.googleapis.com/books/v1/volumes`, {
+    ipcRenderer.on("download-error", (event, message) => {
+      // the event handler for a failed download
+
+      this.setState({
+        downloads: this.state.downloads.filter(
+          (download) => download.id !== message.id
+        ),
+      });
+      new Notification("Download failed", {
+        body: "The source may be down — try another version.",
+        silent: true,
+      });
+    });
+
+    // populating the landing page with something nice to browse
+    this.searchOpenLibrary('publisher:"Stripe Press"').then((books) => {
+      if (!this.state.searchBox.trim()) {
+        this.setState({ searchResults: books });
+      }
+    });
+  }
+
+  searchOpenLibrary = (searchTerm) => {
+    // searches Open Library and maps the results into the Google-Books-like
+    // volume shape the rest of the app was built around. (the Google Books
+    // API now rejects keyless clients, so Open Library provides metadata.)
+    return axios
+      .get(`https://openlibrary.org/search.json`, {
         params: {
-          q: '"Stripe Press"',
+          q: searchTerm,
+          limit: 30,
+          fields:
+            "key,title,subtitle,author_name,first_publish_year,cover_i,subject",
         },
       })
+      .then((res) =>
+        (res.data.docs || []).map((doc) => ({
+          id: doc.key,
+          volumeInfo: {
+            title: doc.title,
+            subtitle: doc.subtitle,
+            authors: doc.author_name,
+            publishedDate: doc.first_publish_year
+              ? String(doc.first_publish_year)
+              : null,
+            description: null,
+            imageLinks: doc.cover_i
+              ? {
+                  thumbnail: `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`,
+                }
+              : null,
+            categories: doc.subject ? doc.subject.slice(0, 4) : null,
+          },
+        }))
+      );
+  };
+
+  fetchBookDescription = (book) => {
+    // search results don't include descriptions, so we fetch the work record
+    // lazily once a book is selected
+    if (!book || book.descriptionFetched) {
+      return;
+    }
+    axios
+      .get(`https://openlibrary.org${book.id}.json`)
       .then((res) => {
-        this.setState({ searchResults: res.data.items });
-      });
-  }
+        let description = res.data.description;
+        if (description && description.value) {
+          description = description.value;
+        }
+        if (typeof description !== "string") {
+          description = null;
+        }
+        this.setState({
+          searchResults: this.state.searchResults.map((item) =>
+            item.id === book.id
+              ? {
+                  ...item,
+                  descriptionFetched: true,
+                  volumeInfo: { ...item.volumeInfo, description: description },
+                }
+              : item
+          ),
+        });
+      })
+      .catch(() => {});
+  };
 
   updateLocalBooks = () => {
     // calling this function will update the localBooks value of state
@@ -131,42 +214,34 @@ class App extends Component {
       this.setState({ searchResults: null, selectedBook: null });
     }
 
-    this.fetchGoogleBooksDebounced(e.target.value);
+    this.fetchBooksDebounced(e.target.value);
   };
 
-  fetchGoogleBooks = (searchTerm) => {
+  fetchBooks = (searchTerm) => {
     if (!searchTerm.trim()) {
       // if the string is empty, we return
       return;
     }
 
     // populating api_data with an initial search
-    axios
-      .get(`https://www.googleapis.com/books/v1/volumes`, {
-        params: {
-          q: searchTerm,
-        },
-      })
-      .then((res) => {
-        if (this.state.searchBox === searchTerm) {
-          if (res.data.items) {
-            if (res.data.items.length > 0) {
-              // removing non-unique results
-              let uniqueResults = uniqBy(res.data.items, "id");
+    this.searchOpenLibrary(searchTerm).then((books) => {
+      if (this.state.searchBox === searchTerm) {
+        if (books.length > 0) {
+          // removing non-unique results
+          let uniqueResults = uniqBy(books, "id");
 
-              this.setState({
-                searchResults: uniqueResults,
-                selectedBook: res.data.items[0],
-              });
-              console.log(res.data.items);
-              this.FetchLibgenSearchResults(res.data.items[0]);
-            } else {
-              // if there are no results we clear the results
-              this.setState({ searchResults: [], selectedBook: null });
-            }
-          }
+          this.setState({
+            searchResults: uniqueResults,
+            selectedBook: uniqueResults[0],
+          });
+          this.fetchBookDescription(uniqueResults[0]);
+          this.FetchLibgenSearchResults(uniqueResults[0]);
+        } else {
+          // if there are no results we clear the results
+          this.setState({ searchResults: [], selectedBook: null });
         }
-      });
+      }
+    });
   };
 
   onLibgenResultClick = (libgenResult, googleBook) => {
@@ -180,7 +255,7 @@ class App extends Component {
       id: googleBook.id,
     };
     this.setState({
-      downloads: [this.state.downloads, bookDownload],
+      downloads: [...this.state.downloads, bookDownload],
     });
 
     ipcRenderer.invoke("download-book", {
@@ -194,6 +269,7 @@ class App extends Component {
       this.setState({ selectedBook: null });
     } else {
       this.setState({ selectedBook: book });
+      this.fetchBookDescription(book);
       this.FetchLibgenSearchResults(book);
     }
   };
@@ -214,23 +290,6 @@ class App extends Component {
       if (!supportedExtensions.includes(book.extension.toLowerCase())) {
         return;
       }
-
-      // normalizing the google title by trimming, deburring, and removing parenthesis
-      let googleTitle = deburr(selectedBook.volumeInfo.title);
-      let libgenTitle = deburr(book.title);
-      // removing parenthesis and brackets
-      libgenTitle = libgenTitle.replace(/(\[.*?\])/g, "");
-      libgenTitle = libgenTitle.replace(/(\(.*?\))/g, "");
-      googleTitle = googleTitle.replace(/(\[.*?\])/g, "");
-      googleTitle = googleTitle.replace(/(\(.*?\))/g, "");
-
-      // trimming the titles and lowercasing
-      libgenTitle = libgenTitle.trim().toLowerCase();
-      googleTitle = googleTitle.trim().toLowerCase();
-
-      // only showing matches that have the same year
-      let googleYear = moment(selectedBook.volumeInfo.publishedDate).year();
-      let libgenYear = parseInt(book.year);
 
       matches.push(book);
     });
@@ -255,7 +314,7 @@ class App extends Component {
   FetchLibgenSearchResults = (book) => {
     // if a book already has libgen matches then we return
     // or if a search has already began
-    if (book.searching || Array.isArray(book.libgenMatches) || !book) return;
+    if (!book || book.searching || Array.isArray(book.libgenMatches)) return;
 
     // showing the `searching` spinner at the bottom of the page
     this.setState({
@@ -298,16 +357,12 @@ class App extends Component {
             }),
           });
         } else if (results.length === 0) {
-          // if there are no results we retry with a broader query by removing the book's description
-          // retrying with a broader search query by removing the book's description
-          // we keep the first author's name in the query
-          searchQuery =
-            book.volumeInfo.title +
-            ` ${book.volumeInfo.authors ? book.volumeInfo.authors[0] : ``}`;
+          // if there are no results we retry with a broader query
+          // using just the book's title
           ipcRenderer
             .invoke("search-libgen-nonfiction", book.volumeInfo.title)
             .then((results) => {
-              this.handleLibgenSearchResults(results, book);
+              this.handleLibgenSearchResults(results || [], book);
             });
         } else {
           this.handleLibgenSearchResults(results, book);
@@ -434,7 +489,7 @@ class App extends Component {
                 fontSize: 14,
               }}
             >
-              {moment(item.volumeInfo.publishedDate).year()}
+              {bookYear(item.volumeInfo)}
             </p>
           </div>
         </motion.div>
@@ -482,7 +537,7 @@ class App extends Component {
 
     // checking if this book already exists in the user's local library
     let bookAlreadyDownloaded;
-    for (let localBook of this.state.localBooks) {
+    for (let localBook of this.state.localBooks || []) {
       if (this.state.selectedBook.id === localBook.book.id) {
         bookAlreadyDownloaded = localBook;
         break;
@@ -536,9 +591,12 @@ class App extends Component {
     } else if (isDownloading) {
       let downloadText;
       let percent = 0;
-      const sizeString = book.libgenMatches[0].size.toLowerCase().trim();
+      // the size of the file actually being downloaded, e.g. "154 kB"
+      const sizeString = (bookDownload.libgenResult?.size || "")
+        .toLowerCase()
+        .trim();
       const number = parseInt(sizeString.split(" ")[0]);
-      const unit = sizeString.split(" ")[1].trim();
+      const unit = (sizeString.split(" ")[1] || "").trim();
       let sizeBytes = 0;
       if (unit === "kb") {
         sizeBytes = number * 1024;
@@ -549,11 +607,13 @@ class App extends Component {
       }
       if (!bookDownload.downloaded) {
         downloadText = "Starting download...";
-      } else {
+      } else if (sizeBytes > 0) {
         downloadText = `Downloaded ${bytesToString(
           bookDownload.downloaded
         )} / ${bytesToString(sizeBytes)} `;
-        percent = (bookDownload.downloaded / sizeBytes) * 100;
+        percent = Math.min((bookDownload.downloaded / sizeBytes) * 100, 100);
+      } else {
+        downloadText = `Downloaded ${bytesToString(bookDownload.downloaded)}`;
       }
 
       BookStatusBar = (
@@ -918,7 +978,7 @@ class App extends Component {
               userSelect: "text",
             }}
           >
-            {moment(book.volumeInfo.publishedDate).year()}
+            {bookYear(book.volumeInfo)}
           </p>
 
           <p
@@ -1054,17 +1114,13 @@ class App extends Component {
                 fontSize: 14,
               }}
             >
-              {moment(book.publishedDate).year()}
+              {bookYear(book)}
             </p>
           </div>
         </motion.div>
       );
     });
     return BookRows;
-  };
-
-  ereader = () => {
-    return <div id="ereader"></div>;
   };
 
   MainArea = (props) => {
@@ -1096,7 +1152,7 @@ class App extends Component {
               }}
             >
               <input
-                autofocus={true}
+                autoFocus={true}
                 className="noSelect"
                 placeholder="Enter a book title or author"
                 type="search"

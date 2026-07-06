@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom';
 import './index.css';
 import App from './App';
 import * as serviceWorker from './serviceWorker';
-import * as Sentry from '@sentry/browser';
 
 ReactDOM.render(
   <React.StrictMode>

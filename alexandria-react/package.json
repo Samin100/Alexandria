@@ -4,12 +4,10 @@
   "private": true,
   "homepage": "./",
   "dependencies": {
-    "@sentry/browser": "^5.18.0",
     "@testing-library/jest-dom": "^4.2.4",
     "@testing-library/react": "^9.3.2",
     "@testing-library/user-event": "^7.1.2",
     "axios": "^0.19.2",
-    "electron": "^9.0.4",
     "framer-motion": "^1.11.1",
     "lodash": "^4.17.15",
     "moment": "^2.26.0",
@@ -21,8 +19,8 @@
     "react-split-pane": "^0.1.91"
   },
   "scripts": {
-    "start": "PORT=2020 BROWSER=none react-scripts start",
-    "build": "react-scripts build",
+    "start": "NODE_OPTIONS=--openssl-legacy-provider PORT=2020 BROWSER=none react-scripts start",
+    "build": "NODE_OPTIONS=--openssl-legacy-provider react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
